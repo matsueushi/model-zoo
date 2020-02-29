@@ -20,13 +20,13 @@ function make_minibatch(xs)
     return @. 2f0 * ys - 1f0
 end
 
-function save_fake_image(gen, animation_noise, train_steps)
+function create_output_image(gen, animation_noise, train_steps)
     @eval Flux.istraining() = false
     fake_images = @. cpu(gen(animation_noise))
     @eval Flux.istraining() = true
     image_array = dropdims(reduce(vcat, reduce.(hcat, partition(fake_images, ANIMATION_Y))); dims=(3, 4))
     image_array = @. Gray(image_array + 1f0) / 2f0
-    return convert_to_image(image_array)
+    return image_array
 end
 
 # Loss functions
@@ -107,9 +107,9 @@ function train()
             gen_loss = train_generator!(gen, dscr, batch, opt_gen)
 
             if train_steps % VERBOSE_FREQ == 0
-                @info("Train step $(train_steps), Discriminator loss: $(disc_loss), Generator loss: $(gen_loss)")
-                # create fake images for animation
-                output_image = save_fake_image(gen, animation_noise, train_steps)
+                @info("Train step $(train_steps), Discriminator loss = $(disc_loss), Generator loss = $(gen_loss)")
+                # Save generated fake image
+                output_image = create_output_image(gen, animation_noise, train_steps)
                 save(@sprintf("dcgan_steps_%06d.png", train_steps), output_image)
             end
             train_steps += 1
