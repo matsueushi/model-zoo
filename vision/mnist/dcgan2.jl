@@ -10,6 +10,7 @@ using Printf
 const BATCH_SIZE = 128
 const NOISE_DIM = 100
 const EPOCHS = 15
+const VERBOSE_FREQ = 100
 
 result_dir = "mnist-dcgan-results"
 
@@ -26,14 +27,11 @@ mutable struct DCGAN
     animation_noise::AbstractMatrix{Float32}
 
     train_steps::Int64
-    verbose_freq::Int64
-    generator_loss_hist::Vector{Float32}
-    discriminator_loss_hist::Vector{Float32}
 end
 
 function DCGAN(; image_vector::Vector{<: AbstractMatrix},
     generator::Chain, discriminator::Chain,
-    animation_size::Pair{Int64, Int64}, verbose_freq::Int64)
+    animation_size::Pair{Int64, Int64})
 
     data = [reshape(reduce(hcat, channelview.(xs)), 28, 28, 1, :) for xs in partition(image_vector, BATCH_SIZE)]
     data = [2f0 .* gpu(Float32.(xs)) .- 1f0 for xs in data]
@@ -41,7 +39,7 @@ function DCGAN(; image_vector::Vector{<: AbstractMatrix},
     animation_noise = randn(Float32, NOISE_DIM, prod(animation_size)) |> gpu
 
     DCGAN(generator, discriminator, ADAM(0.0001f0), ADAM(0.0001f0), data, 
-        animation_size, animation_noise, 0, verbose_freq, Vector{Float32}(), Vector{Float32}())
+        animation_size, animation_noise, 0)
 end
 
 function generator_loss(fake_output)
@@ -101,7 +99,7 @@ function train!(dcgan::DCGAN, epochs::Integer)
             disc_loss = train_discriminator!(dcgan, batch)
             gen_loss = train_generator!(dcgan, batch)
 
-            if dcgan.train_steps % dcgan.verbose_freq == 0
+            if dcgan.train_steps % VERBOSE_FREQ == 0
                 @info("Train step $(dcgan.train_steps), Discriminator loss: $(disc_loss), Generator loss: $(gen_loss)")
                 # create fake images for animation
                 save_fake_image(dcgan)
@@ -138,7 +136,7 @@ function main()
 
     dcgan = DCGAN(; image_vector = MNIST.images(),
         generator = generator, discriminator = discriminator,
-        animation_size = 6=>6, verbose_freq = 100)
+        animation_size = 6=>6)
     train!(dcgan, 30)
 
 end
