@@ -34,24 +34,18 @@ function discriminator_loss(real_output, fake_output)
     return loss
 end
 
-function convert_to_image(image_array::Matrix{Float32})
+function convert_to_image(image_array)
     image_array = @. (image_array + 1f0) / 2f0
     return Gray.(image_array)
 end
 
 function save_fake_image(gen, animation_noise, train_steps)
     @eval Flux.istraining() = false
-    fake_images = gen(animation_noise)
+    fake_images = @. cpu(gen(animation_noise))
     @eval Flux.istraining() = true
-    h, w, _, _ = size(fake_images)
-    tile_image = Matrix{Float32}(undef, h * ANIMATION_X, w * ANIMATION_Y)
-    for n in 0:ANIMATION_X * ANIMATION_Y - 1
-        j = n ÷ ANIMATION_X
-        i = n % ANIMATION_Y
-        tile_image[j * h + 1:(j + 1) * h, i * w + 1:(i + 1) * w] = fake_images[:, :, :, n + 1] |> cpu
-    end
-    image = convert_to_image(tile_image)
-    save(@sprintf("%s/steps_%06d.png", result_dir, train_steps), image)
+    image_array = dropdims(reduce(vcat, reduce.(hcat, partition(fake_images, ANIMATION_Y))); dims=(3, 4))
+    output_image = convert_to_image(image_array)
+    save(@sprintf("%s/steps_%06d.png", result_dir, train_steps), output_image)
 end
 
 function train_discriminator!(gen, dscr, batch, opt_dscr)
@@ -88,7 +82,7 @@ function train()
     images = MNIST.images()
     data = [make_minibatch(xs) |> gpu for xs in partition(images, BATCH_SIZE)]
 
-    animation_noise = randn(Float32, NOISE_DIM, ANIMATION_X * ANIMATION_Y) |> gpu
+    animation_noise = [randn(NOISE_DIM, 1) |> gpu for _=1:ANIMATION_X*ANIMATION_Y]
 
     # Generator
     gen = Chain(
@@ -104,9 +98,11 @@ function train()
 
     # Discriminator
     dscr =  Chain(
-        Conv((4, 4), 1 => 64, leakyrelu; stride = 2, pad = 1),
+        Conv((4, 4), 1 => 64; stride = 2, pad = 1),
+        x->leakyrelu.(x, 0.2f0),
         Dropout(0.25),
-        Conv((4, 4), 64 => 128, leakyrelu; stride = 2, pad = 1),
+        Conv((4, 4), 64 => 128; stride = 2, pad = 1),
+        x->leakyrelu.(x, 0.2f0),
         Dropout(0.25), 
         x->reshape(x, 7 * 7 * 128, :),
         Dense(7 * 7 * 128, 1)) |> gpu
