@@ -1,6 +1,6 @@
 using Base.Iterators: partition
 using Flux
-using Flux: logitbinarycrossentropy, pullback
+using Flux: logitbinarycrossentropy, pullback, glorot_normal
 using Flux.Data.MNIST
 using Flux.Optimise: update!
 using Images
@@ -9,7 +9,6 @@ using Statistics
 const BATCH_SIZE = 128
 const NOISE_DIM = 100
 const EPOCHS = 15
-const VERBOSE_FREQ = 100
 
 const SAMPLE_X = 4
 const SAMPLE_Y = 6
@@ -55,8 +54,11 @@ function sample(gen)
     @eval Flux.istraining() = false
     fake_images = @. cpu(gen(noise))
     @eval Flux.istraining() = true
-    reduce(vcat, reduce.(hcat, partition(fake_images, SAMPLE_Y)))
+    xs = dropdims(reduce(vcat, reduce.(hcat, partition(fake_images, SAMPLE_Y))), dims = 4)
+    @. Gray((xs + 1f0) * 0.5f0)
 end
+
+myleakyrelu(x::Real, a = oftype(x / one(x), 0.01)) = max(a * x, x / one(x))
 
 function train()
     # Load MNIST images
@@ -65,25 +67,25 @@ function train()
 
     # Generator
     generator = Chain(
-        Dense(NOISE_DIM, 7 * 7 * 256),
+        Dense(NOISE_DIM, 7 * 7 * 256; initW = glorot_normal),
         BatchNorm(7 * 7 * 256, relu),
         x->reshape(x, 7, 7, 256, :),
-        ConvTranspose((5, 5), 256 => 128, stride = 1, pad = 2),
+        ConvTranspose((5, 5), 256 => 128; init = glorot_normal, stride = 1, pad = 2),
         BatchNorm(128, relu),
-        ConvTranspose((4, 4), 128 => 64; stride = 2, pad = 1),
+        ConvTranspose((4, 4), 128 => 64; init = glorot_normal, stride = 2, pad = 1),
         BatchNorm(64, relu),
-        ConvTranspose((4, 4), 64 => 1, tanh; stride = 2, pad = 1)) |> gpu
+        ConvTranspose((4, 4), 64 => 1, tanh; init = glorot_normal, stride = 2, pad = 1)) |> gpu
     
     # Discriminator
     discriminator = Chain(
-        Conv((4, 4), 1 => 64, stride = 2, pad = 1),
-        x->leakyrelu.(x, 0.2f0),
+        Conv((4, 4), 1 => 64; init = glorot_normal, stride = 2, pad = 1),
+        x->myleakyrelu.(x, 0.2f0),
         Dropout(0.3),
-        Conv((4, 4), 64 => 128, stride = 2, pad = 1),
-        x->leakyrelu.(x, 0.2f0),
+        Conv((4, 4), 64 => 128; init = glorot_normal, stride = 2, pad = 1),
+        x->myleakyrelu.(x, 0.2f0),
         Dropout(0.3),
         x->reshape(x, 7 * 7 * 128, :),
-        Dense(7 * 7 * 128, 1)) |> gpu
+        Dense(7 * 7 * 128, 1; initW = glorot_normal)) |> gpu
     
     # Optimizers
     opt_gen = ADAM(0.0002f0)
@@ -100,15 +102,14 @@ function train()
             loss_gen = train_generator!(generator, discriminator, batch, opt_gen)
         end
 
-        if train_step % VERBOSE_FREQ == 0
-            @info "Step $(train_step), Discriminator loss = $(loss_dscr), Generator loss = $(loss_gen)"
-        end
+        @info "Discriminator loss = $(loss_dscr), Generator loss = $(loss_gen)"
+
+        # Save generated images
+        save("dcgan_epoch_$(ep).png", sample(generator))
 
         train_step += 1
     end
 
-    # Save generated images
-    save("sample_dcgan.png", sample())
 end
 
 train()
