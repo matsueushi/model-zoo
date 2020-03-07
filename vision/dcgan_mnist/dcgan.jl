@@ -63,6 +63,29 @@ function train_generator!(gen, dscr, x, opt_gen, hparams)
     return loss
 end
 
+function update_models!(dscr, gen, x, opt_dscr, opt_gen, hparams)
+    noise = randn!(similar(x, (hparams.latent_dim, hparams.batch_size)))
+    fake_input = gen(noise)
+    ps_dscr = Flux.params(dscr)
+    ps_gen = Flux.params(gen)
+    
+    # Update discriminator
+    loss_dscr, back_dscr = Flux.pullback(ps_dscr) do
+        discriminator_loss(dscr(x), dscr(fake_input))
+    end
+    grad_dscr = back_dscr(1f0)
+    update!(opt_dscr, ps_dscr, grad_dscr)
+
+    # Update generator
+    loss_gen, back_gen = Flux.pullback(ps_gen) do
+        generator_loss(dscr(gen(noise)))
+    end
+    grad_gen = back_gen(1f0)
+    update!(opt_gen, ps_gen, grad_gen)
+
+    return loss_dscr, loss_dscr
+end
+
 function train(; kws...)
     # Model Parameters
     hparams = HyperParams(; kws...)
@@ -109,8 +132,14 @@ function train(; kws...)
         @info "Epoch $ep"
         for x in data
             # Update discriminator and generator
-            loss_dscr = train_discriminator!(gen, dscr, x, opt_dscr, hparams)
-            loss_gen = train_generator!(gen, dscr, x, opt_gen, hparams)
+            # if size(x, 4) == hparams.batch_size
+            #     @time begin
+            #         loss_dscr = train_discriminator!(gen, dscr, x, opt_dscr, hparams)
+            #         loss_gen = train_generator!(gen, dscr, x, opt_gen, hparams)
+            #     end
+            # end
+
+            loss_dscr, loss_gen = update_models!(dscr, gen, x ,opt_dscr, opt_gen, hparams)
 
             if train_steps % hparams.verbose_freq == 0
                 @info("Train step $(train_steps), Discriminator loss = $(loss_dscr), Generator loss = $(loss_gen)")
