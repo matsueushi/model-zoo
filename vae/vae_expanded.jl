@@ -5,14 +5,16 @@ using Flux
 using Flux: binarycrossentropy
 using Flux.Data: DataLoader
 using Images
+using Logging: with_logger
 using MLDatasets
 using Statistics
+using TensorBoardLogger: TBLogger, tb_overwrite
 using Random
 
 function get_data()
     xtrain, _ = MLDatasets.MNIST.traindata(Float32)
     # MLDatasets uses HWCN format, Flux works with WHCN 
-    xtrain = reshape(xtrain, 28^2, :)
+    xtrain = reshape(permutedims(xtrain, (2, 1, 3)), 28^2, :)
     train_loader = DataLoader(xtrain, batchsize=128, shuffle=true)
     train_loader
 end
@@ -47,7 +49,7 @@ function loss(encoder, decoder, x, device)
     logp_x_z = -sum(binarycrossentropy.(decoder(z), x))
     # regularization
     reg = 0.01f0 * sum(x->sum(x.^2), Flux.params(decoder))
-    println((-logp_x_z + kl_q_p) / 128)
+    # println((-logp_x_z + kl_q_p) / 128)
     -logp_x_z + kl_q_p + reg
 end
 
@@ -80,8 +82,11 @@ function train()
     opt = ADAM()
     ps = Flux.params(encoder.linear, encoder.μ, encoder.logσ, decoder)
 
+    # Logging by TensorBoard.jl
+    tblogger = TBLogger("logs", tb_overwrite)
+
     train_steps = 0
-    for i = 1:2
+    for i = 1:20
         @info "eopch $(i)"
         for x in loader 
             gs = gradient(ps) do
@@ -89,9 +94,12 @@ function train()
             end
             Flux.Optimise.update!(opt, ps, gs)
 
-            if train_steps % verbose_freq == 0
-                @info loss(encoder, decoder, x |> device, device)
+            # if train_steps % verbose_freq == 0
+            train_loss = loss(encoder, decoder, x |> device, device)
+            with_logger(tblogger) do
+                @info "train" aloss=train_loss
             end
+            # end
             train_steps += 1
         end
         s = hcat(img.([sample(decoder, latent_dim, device) for i = 1:10])...)
