@@ -7,15 +7,17 @@ using Flux.Data: DataLoader
 using Images
 using Logging: with_logger
 using MLDatasets
+using Parameters: @with_kw
 using Statistics
 using TensorBoardLogger: TBLogger, tb_overwrite
 using Random
 
-function get_data()
+# load MNIST images and return loader
+function get_data(args)
     xtrain, _ = MLDatasets.MNIST.traindata(Float32)
     # MLDatasets uses HWCN format, Flux works with WHCN 
     xtrain = reshape(permutedims(xtrain, (2, 1, 3)), 28^2, :)
-    train_loader = DataLoader(xtrain, batchsize=128, shuffle=true)
+    train_loader = DataLoader(xtrain, batchsize = args.batch_size, shuffle=true)
     train_loader
 end
 
@@ -24,9 +26,9 @@ struct Encoder
     μ
     logσ
     Encoder(input_dim, latent_dim, hidden_dim, device) = new(
-        Dense(input_dim, hidden_dim, tanh) |> device,  # linear
-        Dense(hidden_dim, latent_dim) |> device,  # μ
-        Dense(hidden_dim, latent_dim) |> device,  # logσ
+        Dense(input_dim, hidden_dim, tanh) |> device,   # linear
+        Dense(hidden_dim, latent_dim) |> device,        # μ
+        Dense(hidden_dim, latent_dim) |> device,        # logσ
     )
 end
 
@@ -49,7 +51,6 @@ function loss(encoder, decoder, x, device)
     logp_x_z = -sum(binarycrossentropy.(decoder(z), x))
     # regularization
     reg = 0.01f0 * sum(x->sum(x.^2), Flux.params(decoder))
-    # println((-logp_x_z + kl_q_p) / 128)
     -logp_x_z + kl_q_p + reg
 end
 
@@ -58,10 +59,30 @@ function sample(decoder, latent_dim, device)
     rand.(Bernoulli.(decoder(y)))
 end
 
+# arguments for the `train` function 
+@with_kw mutable struct Args
+    η = 3e-4            # learning rate
+    batch_size = 128    # batch size
+    sample_size = 10    # sampling size for output    
+    epochs = 20         # number of epochs
+    seed = 0            # random seed
+    cuda = true         # use GPU
+    input_dim = 28^2    # image size
+    latent_dim = 10     # latent dimension
+    hidden_dim = 500    # hidden dimension
+    verbose_freq = 500  # logging for every verbose_freq iterations
+end
+
 img(x) = Gray.(reshape(x, 28, 28))
 
-function train()
-    if CUDAapi.has_cuda_gpu()
+function train(; kws...)
+    # load hyperparamters
+    args = Args(; kws...)
+    args.seed > 0 && Random.seed!(args.seed)
+
+    # GPU config
+    use_cuda = args.cuda && CUDAapi.has_cuda_gpu()
+    if use_cuda
         device = gpu
         @info "Training on GPU"
     else
@@ -69,24 +90,25 @@ function train()
         @info "Training on CPU"
     end
 
-    loader = get_data()
+    # load MNIST images
+    loader = get_data(args)
     
-    input_dim = 28^2
-    latent_dim = 10
-    hidden_dim = 500
-    verbose_freq = 500
-    
-    encoder = Encoder(input_dim, latent_dim, hidden_dim, device)
-    decoder = Decoder(input_dim, latent_dim, hidden_dim, device)
+    # initialize encoder and decoder
+    encoder = Encoder(args.input_dim, args.latent_dim, args.hidden_dim, device)
+    decoder = Decoder(args.input_dim, args.latent_dim, args.hidden_dim, device)
 
-    opt = ADAM()
+    # ADAM optimizer
+    opt = ADAM(args.η)
+    
+    # parameters
     ps = Flux.params(encoder.linear, encoder.μ, encoder.logσ, decoder)
 
     # Logging by TensorBoard.jl
     tblogger = TBLogger("logs", tb_overwrite)
 
+    # training
     train_steps = 0
-    for i = 1:20
+    for i = 1:args.epochs
         @info "eopch $(i)"
         for x in loader 
             gs = gradient(ps) do
@@ -94,15 +116,15 @@ function train()
             end
             Flux.Optimise.update!(opt, ps, gs)
 
-            # if train_steps % verbose_freq == 0
-            train_loss = loss(encoder, decoder, x |> device, device)
-            with_logger(tblogger) do
-                @info "train" aloss=train_loss
+            if train_steps % args.verbose_freq == 0
+                train_loss = loss(encoder, decoder, x |> device, device)
+                with_logger(tblogger) do
+                    @info "train" loss=train_loss
+                end
             end
-            # end
             train_steps += 1
         end
-        s = hcat(img.([sample(decoder, latent_dim, device) for i = 1:10])...)
+        s = hcat(img.([sample(decoder, args.latent_dim, device) for i = 1:args.sample_size])...)
         save("sample$(i).png", s)
     end      
 end
