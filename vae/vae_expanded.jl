@@ -1,6 +1,5 @@
 using Base.Iterators: partition
 using CUDAapi
-using Distributions
 using Flux
 using Flux: binarycrossentropy
 using Flux.Data: DataLoader
@@ -8,6 +7,7 @@ using Images
 using Logging: with_logger
 using MLDatasets
 using Parameters: @with_kw
+using ProgressMeter
 using Statistics
 using TensorBoardLogger: TBLogger, tb_overwrite
 using Random
@@ -42,7 +42,7 @@ Decoder(input_dim, latent_dim, hidden_dim, device) = Chain(
     Dense(hidden_dim, input_dim, sigmoid)
 ) |> device
 
-function loss(encoder, decoder, x, device)
+function model_loss(encoder, decoder, x, device)
     μ, logσ = encoder(x)
     # KL-divergence
     kl_q_p = 0.5f0 * sum(@. (exp(2f0 * logσ) + μ^2 -1f0 - 2f0 * logσ))
@@ -54,9 +54,10 @@ function loss(encoder, decoder, x, device)
     -logp_x_z + kl_q_p + reg
 end
 
-function sample(decoder, latent_dim, device)
-    y = randn(Float32, latent_dim) |> device
-    rand.(Bernoulli.(decoder(y)))
+function generate_image(decoder, latent_dim, device, sample_size)
+    x = randn(Float32, sample_size, latent_dim) |> device
+    samples = mapslices(decoder, x, dims = 1)
+    Gray.(reshape(samples, 28, :))
 end
 
 # arguments for the `train` function 
@@ -70,10 +71,9 @@ end
     input_dim = 28^2    # image size
     latent_dim = 10     # latent dimension
     hidden_dim = 500    # hidden dimension
-    verbose_freq = 500  # logging for every verbose_freq iterations
+    verbose_freq = 10   # logging for every verbose_freq iterations
+    savepath = "logs"   # results path.
 end
-
-img(x) = Gray.(reshape(x, 28, 28))
 
 function train(; kws...)
     # load hyperparamters
@@ -104,28 +104,34 @@ function train(; kws...)
     ps = Flux.params(encoder.linear, encoder.μ, encoder.logσ, decoder)
 
     # Logging by TensorBoard.jl
-    tblogger = TBLogger("logs", tb_overwrite)
+    tblogger = TBLogger(args.savepath, tb_overwrite)
 
     # training
     train_steps = 0
-    for i = 1:args.epochs
-        @info "eopch $(i)"
-        for x in loader 
-            gs = gradient(ps) do
-                loss(encoder, decoder, x |> device, device)
-            end
-            Flux.Optimise.update!(opt, ps, gs)
+    @info "Start Training, total $(args.epochs) epochs"
+    for ep = 1:args.epochs
+        @info "Epoch $(ep)"
+        progress = Progress(length(loader))
 
+        for x in loader 
+            loss, back = Flux.pullback(ps) do
+                model_loss(encoder, decoder, x |> device, device)
+            end
+            grad = back(1f0)
+            Flux.Optimise.update!(opt, ps, grad)
+            # progress meter
+            next!(progress; showvalues = [(:loss, loss)]) 
+
+            # logging
             if train_steps % args.verbose_freq == 0
-                train_loss = loss(encoder, decoder, x |> device, device)
                 with_logger(tblogger) do
-                    @info "train" loss=train_loss
+                    @info "train" loss=loss
                 end
             end
             train_steps += 1
         end
-        s = hcat(img.([sample(decoder, args.latent_dim, device) for i = 1:args.sample_size])...)
-        save("sample$(i).png", s)
+        s = generate_image(decoder, args.latent_dim, device, args.sample_size)
+        save("sample$(ep).png", s)
     end      
 end
 
