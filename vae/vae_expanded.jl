@@ -1,14 +1,20 @@
+# Variational Autoencoder(VAE)
+#
+# Auto-Encoding Variational Bayes
+# Diederik P Kingma, Max Welling
+# https://arxiv.org/abs/1312.6114
+
 using Base.Iterators: partition
-using CUDAapi
+using BSON
+using CUDAapi: has_cuda_gpu
 using Flux
-using Flux: binarycrossentropy
+using Flux: logitbinarycrossentropy
 using Flux.Data: DataLoader
 using Images
 using Logging: with_logger
 using MLDatasets
 using Parameters: @with_kw
-using ProgressMeter
-using Statistics
+using ProgressMeter: Progress, next!
 using TensorBoardLogger: TBLogger, tb_overwrite
 using Random
 
@@ -39,22 +45,24 @@ end
 
 Decoder(input_dim, latent_dim, hidden_dim, device) = Chain(
     Dense(latent_dim, hidden_dim, tanh),
-    Dense(hidden_dim, input_dim, sigmoid)
+    Dense(hidden_dim, input_dim)
 ) |> device
 
 function model_loss(encoder, decoder, x, device)
     μ, logσ = encoder(x)
+    len = size(x)[end]
     # KL-divergence
-    kl_q_p = 0.5f0 * sum(@. (exp(2f0 * logσ) + μ^2 -1f0 - 2f0 * logσ))
+    kl_q_p = 0.5f0 * sum(@. (exp(2f0 * logσ) + μ^2 -1f0 - 2f0 * logσ)) / len
 
     z = μ + device(randn(Float32, size(logσ))) .* exp.(logσ)
-    logp_x_z = -sum(binarycrossentropy.(decoder(z), x))
+    logp_x_z = -sum(logitbinarycrossentropy.(decoder(z), x)) / len
     # regularization
     reg = 0.01f0 * sum(x->sum(x.^2), Flux.params(decoder))
+    
     -logp_x_z + kl_q_p + reg
 end
 
-function generate_image(decoder, latent_dim, device, sample_size)
+function generate_image(decoder, latent_dim, sample_size, device)
     x = randn(Float32, sample_size, latent_dim) |> device
     samples = mapslices(decoder, x, dims = 1)
     Gray.(reshape(samples, 28, :))
@@ -72,6 +80,7 @@ end
     latent_dim = 10     # latent dimension
     hidden_dim = 500    # hidden dimension
     verbose_freq = 10   # logging for every verbose_freq iterations
+    tblogger = false    # log training with tensorboard
     savepath = "logs"   # results path.
 end
 
@@ -81,8 +90,7 @@ function train(; kws...)
     args.seed > 0 && Random.seed!(args.seed)
 
     # GPU config
-    use_cuda = args.cuda && CUDAapi.has_cuda_gpu()
-    if use_cuda
+    if args.cuda && has_cuda_gpu()
         device = gpu
         @info "Training on GPU"
     else
@@ -103,7 +111,7 @@ function train(; kws...)
     # parameters
     ps = Flux.params(encoder.linear, encoder.μ, encoder.logσ, decoder)
 
-    # Logging by TensorBoard.jl
+    # logging by TensorBoard.jl
     tblogger = TBLogger(args.savepath, tb_overwrite)
 
     # training
@@ -123,16 +131,19 @@ function train(; kws...)
             next!(progress; showvalues = [(:loss, loss)]) 
 
             # logging
-            if train_steps % args.verbose_freq == 0
+            if args.tblogger && train_steps % args.verbose_freq == 0
                 with_logger(tblogger) do
                     @info "train" loss=loss
                 end
             end
             train_steps += 1
         end
-        s = generate_image(decoder, args.latent_dim, device, args.sample_size)
-        save("sample$(ep).png", s)
-    end      
+        # save image
+        s = generate_image(decoder, args.latent_dim, args.sample_size, device)
+        image_path = "sample$(ep).png"
+        save(image_path, s)
+        @info "Image saved: $(image_path)"
+    end
 end
 
 train()
