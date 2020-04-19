@@ -7,8 +7,9 @@
 using Base.Iterators: partition
 using BSON
 using CUDAapi: has_cuda_gpu
+using DrWatson: savename, struct2dict
 using Flux
-using Flux: logitbinarycrossentropy
+using Flux: binarycrossentropy
 using Flux.Data: DataLoader
 using Images
 using Logging: with_logger
@@ -19,11 +20,11 @@ using TensorBoardLogger: TBLogger, tb_overwrite
 using Random
 
 # load MNIST images and return loader
-function get_data(args)
+function get_data(batch_size)
     xtrain, _ = MLDatasets.MNIST.traindata(Float32)
     # MLDatasets uses HWCN format, Flux works with WHCN 
     xtrain = reshape(permutedims(xtrain, (2, 1, 3)), 28^2, :)
-    train_loader = DataLoader(xtrain, batchsize = args.batch_size, shuffle=true)
+    train_loader = DataLoader(xtrain, batchsize = batch_size, shuffle=true)
     train_loader
 end
 
@@ -45,19 +46,19 @@ end
 
 Decoder(input_dim, latent_dim, hidden_dim, device) = Chain(
     Dense(latent_dim, hidden_dim, tanh),
-    Dense(hidden_dim, input_dim)
+    Dense(hidden_dim, input_dim, sigmoid)
 ) |> device
 
-function model_loss(encoder, decoder, x, device)
+function model_loss(encoder, decoder, λ, x, device)
     μ, logσ = encoder(x)
     len = size(x)[end]
     # KL-divergence
     kl_q_p = 0.5f0 * sum(@. (exp(2f0 * logσ) + μ^2 -1f0 - 2f0 * logσ)) / len
 
     z = μ + device(randn(Float32, size(logσ))) .* exp.(logσ)
-    logp_x_z = -sum(logitbinarycrossentropy.(decoder(z), x)) / len
+    logp_x_z = -sum(binarycrossentropy.(decoder(z), x)) / len
     # regularization
-    reg = 0.01f0 * sum(x->sum(x.^2), Flux.params(decoder))
+    reg = λ * sum(x->sum(x.^2), Flux.params(decoder))
     
     -logp_x_z + kl_q_p + reg
 end
@@ -70,7 +71,8 @@ end
 
 # arguments for the `train` function 
 @with_kw mutable struct Args
-    η = 3e-4            # learning rate
+    η = 1e-3            # learning rate
+    λ = 0.01f0          # regularization paramater
     batch_size = 128    # batch size
     sample_size = 10    # sampling size for output    
     epochs = 20         # number of epochs
@@ -81,7 +83,7 @@ end
     hidden_dim = 500    # hidden dimension
     verbose_freq = 10   # logging for every verbose_freq iterations
     tblogger = false    # log training with tensorboard
-    savepath = "logs"   # results path.
+    save_path = nothing # results path.
 end
 
 function train(; kws...)
@@ -99,7 +101,7 @@ function train(; kws...)
     end
 
     # load MNIST images
-    loader = get_data(args)
+    loader = get_data(args.batch_size)
     
     # initialize encoder and decoder
     encoder = Encoder(args.input_dim, args.latent_dim, args.hidden_dim, device)
@@ -112,18 +114,24 @@ function train(; kws...)
     ps = Flux.params(encoder.linear, encoder.μ, encoder.logσ, decoder)
 
     # logging by TensorBoard.jl
-    tblogger = TBLogger(args.savepath, tb_overwrite)
+    tblogger = TBLogger(args.save_path, tb_overwrite)
+
+    # save directory
+    if args.save_path == nothing
+        experiment_folder = savename("vae", args, scientific=4, accesses=[:batch_size, :η, :λ, :seed])
+        args.save_path = joinpath("runs", experiment_folder)
+    end
 
     # training
     train_steps = 0
     @info "Start Training, total $(args.epochs) epochs"
-    for ep = 1:args.epochs
-        @info "Epoch $(ep)"
+    for epoch = 1:args.epochs
+        @info "Epoch $(epoch)"
         progress = Progress(length(loader))
 
         for x in loader 
             loss, back = Flux.pullback(ps) do
-                model_loss(encoder, decoder, x |> device, device)
+                model_loss(encoder, decoder, args.λ, x |> device, device)
             end
             grad = back(1f0)
             Flux.Optimise.update!(opt, ps, grad)
@@ -140,10 +148,25 @@ function train(; kws...)
         end
         # save image
         s = generate_image(decoder, args.latent_dim, args.sample_size, device)
-        image_path = "sample$(ep).png"
+        image_path = "sample$(epoch).png"
         save(image_path, s)
         @info "Image saved: $(image_path)"
     end
+
+    # save models
+    !ispath(args.save_path) && mkpath(args.save_path)
+    model_path = joinpath(args.save_path, "model.bson") 
+    let encoder = cpu(encoder), decoder = cpu(decoder), args=struct2dict(args)
+        BSON.@save model_path encoder decoder args
+        @info "Model saved: $(model_path)"
+    end
 end
 
-train()
+function plot_result()
+    BSON.@load "logs/model.bson" encoder decoder args
+    args = Args(; args...)
+    device = args.cuda && has_cuda_gpu() ? gpu : cpu
+    encoder, decoder = encoder |> device, decoder |> device
+end
+
+# train()

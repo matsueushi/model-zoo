@@ -235,6 +235,12 @@ version = "0.8.2"
 deps = ["Random", "Serialization", "Sockets"]
 uuid = "8ba89e20-285c-5b6f-9357-94700520ee1b"
 
+[[DrWatson]]
+deps = ["FileIO", "LibGit2", "Pkg", "Random", "Requires"]
+git-tree-sha1 = "088ce4bce400017097f0f94039e0d5026ffef1d4"
+uuid = "634d3b9d-ee7a-5ddf-bec9-22491ea816e1"
+version = "1.10.2"
+
 [[EllipsisNotation]]
 git-tree-sha1 = "65dad386e877850e6fce4fc77f60fe75a468ce9d"
 uuid = "da5c29d0-fa7d-589e-88eb-ea29b0a81949"
