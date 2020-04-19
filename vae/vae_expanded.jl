@@ -21,10 +21,10 @@ using Random
 
 # load MNIST images and return loader
 function get_data(batch_size)
-    xtrain, _ = MLDatasets.MNIST.traindata(Float32)
+    xtrain, ytrain = MLDatasets.MNIST.traindata(Float32)
     # MLDatasets uses HWCN format, Flux works with WHCN 
     xtrain = reshape(permutedims(xtrain, (2, 1, 3)), 28^2, :)
-    train_loader = DataLoader(xtrain, batchsize = batch_size, shuffle=true)
+    train_loader = DataLoader(xtrain, ytrain, batchsize = batch_size, shuffle=true)
     train_loader
 end
 
@@ -129,7 +129,7 @@ function train(; kws...)
         @info "Epoch $(epoch)"
         progress = Progress(length(loader))
 
-        for x in loader 
+        for (x, _) in loader 
             loss, back = Flux.pullback(ps) do
                 model_loss(encoder, decoder, args.λ, x |> device, device)
             end
@@ -162,11 +162,28 @@ function train(; kws...)
     end
 end
 
+# train()
+
+using Plots
+
 function plot_result()
     BSON.@load "logs/model.bson" encoder decoder args
     args = Args(; args...)
     device = args.cuda && has_cuda_gpu() ? gpu : cpu
     encoder, decoder = encoder |> device, decoder |> device
+    # load MNIST images
+    loader = get_data(args.batch_size)
+
+    # clustering in the latent space
+    # visualize first two dims
+    plt = scatter(palette = :rainbow)
+    for (i, (x, y)) in enumerate(loader)
+        i < 20 || break
+        μ, logσ = encoder(x |> device)
+        scatter!(μ[1, :], μ[2, :], 
+            markerstrokewidth = 0, markeralpha = 0.8,
+            markercolor = y, label = "")
+    end
+    savefig(plt, "clustering.png")
 end
 
-# train()
