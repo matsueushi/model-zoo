@@ -9,7 +9,7 @@ using BSON
 using CUDAapi: has_cuda_gpu
 using DrWatson: savename, struct2dict
 using Flux
-using Flux: binarycrossentropy
+using Flux: binarycrossentropy, chunk
 using Flux.Data: DataLoader
 using Images
 using Logging: with_logger
@@ -24,7 +24,7 @@ function get_data(batch_size)
     xtrain, ytrain = MLDatasets.MNIST.traindata(Float32)
     # MLDatasets uses HWCN format, Flux works with WHCN 
     xtrain = reshape(permutedims(xtrain, (2, 1, 3)), 28^2, :)
-    train_loader = DataLoader(xtrain, ytrain, batchsize = batch_size, shuffle=true)
+    train_loader = DataLoader(xtrain, ytrain, batchsize=batch_size, shuffle=true)
     train_loader
 end
 
@@ -63,9 +63,8 @@ function model_loss(encoder, decoder, λ, x, device)
     -logp_x_z + kl_q_p + reg
 end
 
-function generate_image(decoder, latent_dim, sample_size, device)
-    x = randn(Float32, sample_size, latent_dim) |> device
-    samples = mapslices(decoder, x, dims = 1)
+function sample_image(decoder, x)
+    samples = mapslices(decoder, x, dims=1)
     Gray.(reshape(samples, 28, :))
 end
 
@@ -136,7 +135,7 @@ function train(; kws...)
             grad = back(1f0)
             Flux.Optimise.update!(opt, ps, grad)
             # progress meter
-            next!(progress; showvalues = [(:loss, loss)]) 
+            next!(progress; showvalues=[(:loss, loss)]) 
 
             # logging
             if args.tblogger && train_steps % args.verbose_freq == 0
@@ -147,7 +146,8 @@ function train(; kws...)
             train_steps += 1
         end
         # save image
-        s = generate_image(decoder, args.latent_dim, args.sample_size, device)
+        x = randn(Float32, args.sample_size, args.latent_dim) |> device
+        s = sample_image(decoder, x)
         image_path = "sample$(epoch).png"
         save(image_path, s)
         @info "Image saved: $(image_path)"
@@ -176,14 +176,25 @@ function plot_result()
 
     # clustering in the latent space
     # visualize first two dims
-    plt = scatter(palette = :rainbow)
+    plt = scatter(palette=:rainbow)
     for (i, (x, y)) in enumerate(loader)
         i < 20 || break
         μ, logσ = encoder(x |> device)
         scatter!(μ[1, :], μ[2, :], 
-            markerstrokewidth = 0, markeralpha = 0.8,
-            markercolor = y, label = "")
+            markerstrokewidth=0, markeralpha=0.8,
+            markercolor=y, label="")
     end
     savefig(plt, "clustering.png")
+
+    z = range(-2.0, stop=2.0, length=11)
+    len = Base.length(z)
+    z1 = repeat(z, len)
+    z2 = sort(z1)
+    x = zeros(Float32, args.latent_dim, len^2) |> device
+    x[1, :] = z1
+    x[2, :] = z2
+    samples = decoder(x)
+    fig = Gray.(vcat(reshape.(chunk(samples, len), 28, :)...))
+    save("decoded.png", fig)
 end
 
