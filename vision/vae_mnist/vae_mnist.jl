@@ -7,7 +7,7 @@
 using Base.Iterators: partition
 using BSON
 using CUDAapi: has_cuda_gpu
-using DrWatson: savename, struct2dict
+using DrWatson: struct2dict
 using Flux
 using Flux: binarycrossentropy, chunk
 using Flux.Data: DataLoader
@@ -64,25 +64,25 @@ function model_loss(encoder, decoder, λ, x, device)
 end
 
 function sample_image(decoder, x)
-    samples = mapslices(decoder, x, dims=1)
+    samples = decoder(x)
     Gray.(reshape(samples, 28, :))
 end
 
 # arguments for the `train` function 
 @with_kw mutable struct Args
-    η = 1e-3            # learning rate
-    λ = 0.01f0          # regularization paramater
-    batch_size = 128    # batch size
-    sample_size = 10    # sampling size for output    
-    epochs = 20         # number of epochs
-    seed = 0            # random seed
-    cuda = true         # use GPU
-    input_dim = 28^2    # image size
-    latent_dim = 10     # latent dimension
-    hidden_dim = 500    # hidden dimension
-    verbose_freq = 10   # logging for every verbose_freq iterations
-    tblogger = false    # log training with tensorboard
-    save_path = nothing # results path.
+    η = 1e-3                # learning rate
+    λ = 0.01f0              # regularization paramater
+    batch_size = 128        # batch size
+    sample_size = 10        # sampling size for output    
+    epochs = 20             # number of epochs
+    seed = 0                # random seed
+    cuda = true             # use GPU
+    input_dim = 28^2        # image size
+    latent_dim = 10         # latent dimension
+    hidden_dim = 500        # hidden dimension
+    verbose_freq = 10       # logging for every verbose_freq iterations
+    tblogger = false        # log training with tensorboard
+    save_path = "output"    # results path
 end
 
 function train(; kws...)
@@ -115,14 +115,7 @@ function train(; kws...)
     # logging by TensorBoard.jl
     tblogger = TBLogger(args.save_path, tb_overwrite)
 
-    # save directory
-    if args.save_path == nothing
-        experiment_folder = savename("vae", args, scientific=4, accesses=[:batch_size, :η, :λ, :seed])
-        args.save_path = joinpath("runs", experiment_folder)
-    end
-
     # training
-    train_steps = 0
     @info "Start Training, total $(args.epochs) epochs"
     for epoch = 1:args.epochs
         @info "Epoch $(epoch)"
@@ -137,18 +130,17 @@ function train(; kws...)
             # progress meter
             next!(progress; showvalues=[(:loss, loss)]) 
 
-            # logging
+            # logging with TensorBoard
             if args.tblogger && train_steps % args.verbose_freq == 0
                 with_logger(tblogger) do
                     @info "train" loss=loss
                 end
             end
-            train_steps += 1
         end
         # save image
-        x = randn(Float32, args.sample_size, args.latent_dim) |> device
+        x = randn(Float32, args.latent_dim, args.sample_size) |> device
         s = sample_image(decoder, x)
-        image_path = "sample$(epoch).png"
+        image_path = joinpath(args.save_path, "sample$(epoch).png")
         save(image_path, s)
         @info "Image saved: $(image_path)"
     end
@@ -162,39 +154,7 @@ function train(; kws...)
     end
 end
 
-# train()
 
-using Plots
-
-function plot_result()
-    BSON.@load "logs/model.bson" encoder decoder args
-    args = Args(; args...)
-    device = args.cuda && has_cuda_gpu() ? gpu : cpu
-    encoder, decoder = encoder |> device, decoder |> device
-    # load MNIST images
-    loader = get_data(args.batch_size)
-
-    # clustering in the latent space
-    # visualize first two dims
-    plt = scatter(palette=:rainbow)
-    for (i, (x, y)) in enumerate(loader)
-        i < 20 || break
-        μ, logσ = encoder(x |> device)
-        scatter!(μ[1, :], μ[2, :], 
-            markerstrokewidth=0, markeralpha=0.8,
-            markercolor=y, label="")
-    end
-    savefig(plt, "clustering.png")
-
-    z = range(-2.0, stop=2.0, length=11)
-    len = Base.length(z)
-    z1 = repeat(z, len)
-    z2 = sort(z1)
-    x = zeros(Float32, args.latent_dim, len^2) |> device
-    x[1, :] = z1
-    x[2, :] = z2
-    samples = decoder(x)
-    fig = Gray.(vcat(reshape.(chunk(samples, len), 28, :)...))
-    save("decoded.png", fig)
+if abspath(PROGRAM_FILE) == @__FILE__ 
+    train()
 end
-
