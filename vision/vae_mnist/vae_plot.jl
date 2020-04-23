@@ -30,7 +30,10 @@ function plot_result()
     x[1, :] = z1
     x[2, :] = z2
     samples = decoder(x)
-    fig = Gray.(vcat(reshape.(chunk(samples, len), 28, :)...))
-    save("output/decoded.png", fig)
+    image = convert_image(samples, len)
+    save("output/decoded.png", image)
 end
 
+if abspath(PROGRAM_FILE) == @__FILE__ 
+    plot_result()
+end

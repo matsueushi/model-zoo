@@ -24,8 +24,7 @@ function get_data(batch_size)
     xtrain, ytrain = MLDatasets.MNIST.traindata(Float32)
     # MLDatasets uses HWCN format, Flux works with WHCN 
     xtrain = reshape(permutedims(xtrain, (2, 1, 3)), 28^2, :)
-    train_loader = DataLoader(xtrain, ytrain, batchsize=batch_size, shuffle=true)
-    train_loader
+    DataLoader(xtrain, ytrain, batchsize=batch_size, shuffle=true)
 end
 
 struct Encoder
@@ -49,24 +48,26 @@ Decoder(input_dim, latent_dim, hidden_dim, device) = Chain(
     Dense(hidden_dim, input_dim, sigmoid)
 ) |> device
 
-function model_loss(encoder, decoder, λ, x, device)
+function reconstuct(encoder, decoder, x, device)
     μ, logσ = encoder(x)
+    z = μ + device(randn(Float32, size(logσ))) .* exp.(logσ)
+    μ, logσ, decoder(z)
+end
+
+function model_loss(encoder, decoder, λ, x, device)
+    μ, logσ, decoder_z = reconstuct(encoder, decoder, x, device)
     len = size(x)[end]
     # KL-divergence
     kl_q_p = 0.5f0 * sum(@. (exp(2f0 * logσ) + μ^2 -1f0 - 2f0 * logσ)) / len
 
-    z = μ + device(randn(Float32, size(logσ))) .* exp.(logσ)
-    logp_x_z = -sum(binarycrossentropy.(decoder(z), x)) / len
+    logp_x_z = -sum(binarycrossentropy.(decoder_z, x)) / len
     # regularization
     reg = λ * sum(x->sum(x.^2), Flux.params(decoder))
     
     -logp_x_z + kl_q_p + reg
 end
 
-function sample_image(decoder, x)
-    samples = decoder(x)
-    Gray.(reshape(samples, 28, :))
-end
+convert_image(x, y_size) = Gray.(vcat(reshape.(chunk(x, y_size), 28, :)...))
 
 # arguments for the `train` function 
 @with_kw mutable struct Args
@@ -78,7 +79,7 @@ end
     seed = 0                # random seed
     cuda = true             # use GPU
     input_dim = 28^2        # image size
-    latent_dim = 10         # latent dimension
+    latent_dim = 2          # latent dimension
     hidden_dim = 500        # hidden dimension
     verbose_freq = 10       # logging for every verbose_freq iterations
     tblogger = false        # log training with tensorboard
@@ -115,7 +116,15 @@ function train(; kws...)
     # logging by TensorBoard.jl
     tblogger = TBLogger(args.save_path, tb_overwrite)
 
+    # fixed input
+    original, _ = first(get_data(100))
+    original = original |> device
+    image = convert_image(original, 10)
+    image_path = joinpath(args.save_path, "original.png")
+    save(image_path, image)
+
     # training
+    train_steps = 0
     @info "Start Training, total $(args.epochs) epochs"
     for epoch = 1:args.epochs
         @info "Epoch $(epoch)"
@@ -136,16 +145,18 @@ function train(; kws...)
                     @info "train" loss=loss
                 end
             end
+
+            train_steps += 1
         end
         # save image
-        x = randn(Float32, args.latent_dim, args.sample_size) |> device
-        s = sample_image(decoder, x)
+        _, _, rec_original = reconstuct(encoder, decoder, original, device)
+        image = convert_image(rec_original, 10)
         image_path = joinpath(args.save_path, "sample$(epoch).png")
-        save(image_path, s)
+        save(image_path, image)
         @info "Image saved: $(image_path)"
     end
 
-    # save models
+    # save mos
     !ispath(args.save_path) && mkpath(args.save_path)
     model_path = joinpath(args.save_path, "model.bson") 
     let encoder = cpu(encoder), decoder = cpu(decoder), args=struct2dict(args)
@@ -153,7 +164,6 @@ function train(; kws...)
         @info "Model saved: $(model_path)"
     end
 end
-
 
 if abspath(PROGRAM_FILE) == @__FILE__ 
     train()
