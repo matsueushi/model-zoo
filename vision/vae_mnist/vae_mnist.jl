@@ -67,7 +67,7 @@ function model_loss(encoder, decoder, λ, x, device)
     -logp_x_z + kl_q_p + reg
 end
 
-convert_image(x, y_size) = Gray.(vcat(reshape.(chunk(x, y_size), 28, :)...))
+convert_image(x, y_size) = Gray.(vcat(reshape.(chunk(x |> cpu, y_size), 28, :)...))
 
 # arguments for the `train` function 
 @with_kw mutable struct Args
@@ -113,8 +113,12 @@ function train(; kws...)
     # parameters
     ps = Flux.params(encoder.linear, encoder.μ, encoder.logσ, decoder)
 
+    !ispath(args.save_path) && mkpath(args.save_path)
+
     # logging by TensorBoard.jl
-    tblogger = TBLogger(args.save_path, tb_overwrite)
+    if args.tblogger
+        tblogger = TBLogger(args.save_path, tb_overwrite)
+    end
 
     # fixed input
     original, _ = first(get_data(100))
@@ -157,7 +161,6 @@ function train(; kws...)
     end
 
     # save mos
-    !ispath(args.save_path) && mkpath(args.save_path)
     model_path = joinpath(args.save_path, "model.bson") 
     let encoder = cpu(encoder), decoder = cpu(decoder), args=struct2dict(args)
         BSON.@save model_path encoder decoder args
