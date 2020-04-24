@@ -31,7 +31,7 @@ function plot_result()
     x[2, :] = z2
     samples = decoder(x)
     image = convert_image(samples, len)
-    save("output/decoded.png", image)
+    save("output/manifold.png", image)
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__ 

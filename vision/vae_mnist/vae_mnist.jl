@@ -155,7 +155,7 @@ function train(; kws...)
         # save image
         _, _, rec_original = reconstuct(encoder, decoder, original, device)
         image = convert_image(rec_original, 10)
-        image_path = joinpath(args.save_path, "sample$(epoch).png")
+        image_path = joinpath(args.save_path, "epoch_$(epoch).png")
         save(image_path, image)
         @info "Image saved: $(image_path)"
     end
