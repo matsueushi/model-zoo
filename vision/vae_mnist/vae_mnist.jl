@@ -67,7 +67,7 @@ function model_loss(encoder, decoder, λ, x, device)
     -logp_x_z + kl_q_p + reg
 end
 
-convert_image(x, y_size) = Gray.(vcat(reshape.(chunk(x |> cpu, y_size), 28, :)...))
+convert_to_image(x, y_size) = Gray.(vcat(reshape.(chunk(x |> cpu, y_size), 28, :)...))
 
 # arguments for the `train` function 
 @with_kw mutable struct Args
@@ -121,9 +121,9 @@ function train(; kws...)
     end
 
     # fixed input
-    original, _ = first(get_data(100))
+    original, _ = first(get_data(args.sample_size^2))
     original = original |> device
-    image = convert_image(original, 10)
+    image = convert_to_image(original, args.sample_size)
     image_path = joinpath(args.save_path, "original.png")
     save(image_path, image)
 
@@ -154,7 +154,7 @@ function train(; kws...)
         end
         # save image
         _, _, rec_original = reconstuct(encoder, decoder, original, device)
-        image = convert_image(rec_original, 10)
+        image = convert_to_image(rec_original, args.sample_size)
         image_path = joinpath(args.save_path, "epoch_$(epoch).png")
         save(image_path, image)
         @info "Image saved: $(image_path)"

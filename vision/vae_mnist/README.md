@@ -6,9 +6,13 @@ cd vision/vae_mnist
 julia --project vae_mnist.jl
 ```
 
-Original iamges
+Original image
 
 ![Original](docs/original.png)
+
+5 epochs
+
+![5 epochs](docs/epoch_5.png)
 
 10 epochs
 
@@ -22,10 +26,10 @@ Original iamges
 ```shell
 julia --project vae_plot.jl
 ```
-Visualization of latent space
+Latent space clustering
 
 ![Clustering](docs/clustering.png)
 
-Visualization of 2D manifold
+2D manifold
 
 ![Manifold](docs/manifold.png)

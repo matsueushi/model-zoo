@@ -18,6 +18,7 @@ function plot_result()
         μ, logσ = encoder(x |> device)
         scatter!(μ[1, :], μ[2, :], 
             markerstrokewidth=0, markeralpha=0.8,
+            aspect_ratio=1,
             markercolor=y, label="")
     end
     savefig(plt, "output/clustering.png")
@@ -30,7 +31,7 @@ function plot_result()
     x[1, :] = z1
     x[2, :] = z2
     samples = decoder(x)
-    image = convert_image(samples, len)
+    image = convert_to_image(samples, len)
     save("output/manifold.png", image)
 end
 
